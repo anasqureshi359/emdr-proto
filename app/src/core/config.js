@@ -8,6 +8,7 @@ export const HARD = Object.freeze({
   distressBlockMax: 8,
   distressBlockMin: 5,
   flaggedPauseHours: 4, // cannot be switched off or shortened
+  checkinHoldMsMin: 2000, // a check-in question cannot take an answer sooner than this
 });
 
 export const DEFAULTS = Object.freeze({
@@ -25,6 +26,7 @@ export const DEFAULTS = Object.freeze({
   rounds: 3, // placeholder rounds in this build: there are no exercises yet
   roundSeconds: 20,
   minDwellMs: 2500, // shortest time a reading step stays up before "continue" works
+  checkinHoldMs: 2000, // each check-in question ignores answers for this long, so it cannot be clicked through
   sceneFadeInMs: 1500,
   toRoomFadeMs: 1000,
   frameRateFloor: 71, // "under 72 fps", with 1 fps of tolerance for jitter
@@ -51,5 +53,6 @@ export function normalizeConfig(input = {}) {
   c.final.gapHours = clamp(Number(c.final.gapHours) || DEFAULTS.final.gapHours, HARD.finalGapHoursMin, 12);
   c.rounds = clamp(Math.round(Number(c.rounds) || DEFAULTS.rounds), 1, 6);
   c.roundSeconds = clamp(Number(c.roundSeconds) || DEFAULTS.roundSeconds, 5, 120);
+  c.checkinHoldMs = clamp(Number(c.checkinHoldMs) || DEFAULTS.checkinHoldMs, HARD.checkinHoldMsMin, 5000);
   return c;
 }

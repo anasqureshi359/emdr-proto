@@ -140,4 +140,7 @@ test('settings are forced inside their hard limits', () => {
   assert.equal(c.final.sessionsPerDay, 2);
   assert.equal(c.final.gapHours, 2);
   assert.equal(normalizeConfig({ distressBlock: 1 }).distressBlock, 5);
+  assert.equal(normalizeConfig({ checkinHoldMs: 0 }).checkinHoldMs, 2000, 'the check-in hold cannot be switched off');
+  assert.equal(normalizeConfig({ checkinHoldMs: 500 }).checkinHoldMs, 2000, 'or shortened');
+  assert.equal(normalizeConfig({ checkinHoldMs: 60000 }).checkinHoldMs, 5000);
 });

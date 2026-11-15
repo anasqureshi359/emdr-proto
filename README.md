@@ -14,7 +14,7 @@ Check-in, stop rules, the grounding exit, closure and the session log, in an emp
 
 - `src/core/` holds the session logic as pure code: `machine.js` (the session state machine), `eligibility.js` (the pause, caps and lock rules) and `config.js` (defaults and hard limits).
 - `src/xr.js` is the headset view, `src/panel.js` draws each screen, `src/store.js` keeps the log in IndexedDB on the device, and `src/main.js` wires the page.
-- `test/` has 55 automated tests, at least one for every stop rule, plus a sweep that fires each trigger from every state.
+- `test/` has 63 automated tests, at least one for every stop rule, plus a sweep that fires each trigger from every state.
 - `TRACE.md` maps each stop rule to the tests that cover it.
 
 ```
@@ -25,6 +25,11 @@ npm run build    # writes app/index.html
 ```
 
 The session log stays in the browser on the headset until it is downloaded from the page. Wording on every screen is a draft.
+
+Version 0.2 (after the first headset runs):
+
+- Each check-in question takes no answer for its first 2 seconds, so a fast press cannot click through it. The grounding button is not held.
+- Each session records its measured frame rate: the average, and the lowest 2-second average.
 
 ## Headset spike (`spike/`)
 

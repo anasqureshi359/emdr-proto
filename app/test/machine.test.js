@@ -29,9 +29,12 @@ class Driver {
       this.send('tick');
     }
   }
-  yes() { this.send('primary'); }
-  no() { this.send('secondary'); }
+  /** Wait out the hold on a check-in question, as a user reading it would. */
+  ready() { while (this.s.screen(this.t).locked) this.wait(100); }
+  yes() { this.ready(); this.send('primary'); }
+  no() { this.ready(); this.send('secondary'); }
   rate(v) {
+    this.ready();
     this.send('move', { dir: 1 }); // from "nothing chosen" to 5
     const cur = () => this.s.screen(this.t).value;
     while (cur() < v) this.send('move', { dir: 1 });
@@ -84,6 +87,123 @@ class Driver {
 
 const enteredExerciseAfter = (d, index) => d.visited.slice(index).some((s) => EXERCISE_STATES.has(s));
 const triggers = (d) => d.rec.flags.map((f) => f.trigger);
+
+/* ---------------------------------------------------------------- check-in hold */
+
+test('a check-in question ignores both answers until it has been up for 2 seconds', () => {
+  const d = new Driver();
+  assert.equal(d.s.config.checkinHoldMs, 2000);
+  d.send('secondary');
+  d.send('primary');
+  assert.equal(d.state, S.CHECK_CRISIS, 'answers in the first instant are ignored');
+  d.wait(1900);
+  d.send('primary');
+  d.send('secondary');
+  assert.equal(d.state, S.CHECK_CRISIS, 'still ignored at 1.9 s');
+  assert.deepEqual(d.rec.checkin, {}, 'nothing was recorded from the ignored presses');
+  assert.equal(d.rec.flags.length, 0);
+  d.wait(100);
+  d.send('secondary');
+  assert.equal(d.state, S.CHECK_DISTRESS, 'accepted at 2.0 s');
+});
+
+test('an early "yes" to the crisis question is ignored, and a later one still works', () => {
+  const d = new Driver();
+  d.wait(500);
+  d.send('primary');
+  assert.equal(d.state, S.CHECK_CRISIS);
+  d.wait(1500);
+  d.send('primary');
+  assert.equal(d.state, S.CRISIS);
+});
+
+test('every check-in question has its own hold, so none can be clicked through', () => {
+  const d = new Driver();
+  d.wait(2000); d.send('secondary');
+  assert.equal(d.state, S.CHECK_DISTRESS);
+  d.send('move', { dir: 1 }); // choosing a number is allowed during the hold
+  d.send('primary');
+  assert.equal(d.state, S.CHECK_DISTRESS, 'confirming the rating is held');
+  assert.equal(d.s.screen(d.t).value, 5, 'the chosen number is kept');
+  d.wait(2000); d.send('primary');
+  assert.equal(d.state, S.CHECK_UNREAL);
+  d.send('secondary');
+  assert.equal(d.state, S.CHECK_UNREAL, 'third question is held');
+  d.wait(2000); d.send('secondary');
+  assert.equal(d.state, S.CHECK_UNWELL);
+  d.send('secondary'); d.send('primary');
+  assert.equal(d.state, S.CHECK_UNWELL, 'fourth question is held');
+  d.wait(2000); d.send('secondary');
+  assert.equal(d.state, S.SCENE_IN);
+  const checkin = d.rec.steps.filter((x) => CHECKIN_STATES.has(x.state));
+  assert.equal(checkin.length, 4);
+  for (const x of checkin) assert.ok(x.ms >= 2000, `${x.state} was up for ${x.ms} ms`);
+});
+
+test('the grounding button works at once during the hold', () => {
+  const d = new Driver();
+  d.send('grounding');
+  assert.equal(d.state, S.GROUND);
+  assert.deepEqual(triggers(d), ['grounding-button']);
+});
+
+test('time spent paused does not count toward the hold', () => {
+  const d = new Driver();
+  d.wait(1000);
+  d.send('visibility', { state: 'visible-blurred' });
+  d.wait(5000);
+  d.send('visibility', { state: 'visible' });
+  d.send('secondary');
+  assert.equal(d.state, S.CHECK_CRISIS, 'only 1 second of reading time has passed');
+  d.wait(1000);
+  d.send('secondary');
+  assert.equal(d.state, S.CHECK_DISTRESS);
+});
+
+test('the hold starts again when check-in restarts after the headset was off', () => {
+  const d = new Driver();
+  d.no();
+  d.wait(3000);
+  d.send('visibility', { state: 'hidden' });
+  d.wait(4000);
+  d.send('visibility', { state: 'visible' });
+  assert.equal(d.state, S.CHECK_CRISIS);
+  d.send('secondary');
+  assert.equal(d.state, S.CHECK_CRISIS, 'the restarted question is held');
+  d.wait(2000);
+  d.send('secondary');
+  assert.equal(d.state, S.CHECK_DISTRESS);
+});
+
+test('a held question shows that it is held and when it opens', () => {
+  const d = new Driver();
+  let sc = d.s.screen(d.t);
+  assert.equal(sc.locked, true);
+  assert.equal(sc.canContinue, false);
+  assert.equal(sc.hint, 'Read the question first');
+  assert.ok(sc.progress >= 0 && sc.progress < 1);
+  assert.equal(sc.showGroundingHint, true, 'the grounding hint stays on a held question');
+  d.wait(1000);
+  assert.ok(Math.abs(d.s.screen(d.t).progress - 0.5) < 0.06);
+  d.wait(1000);
+  sc = d.s.screen(d.t);
+  assert.equal(sc.locked, false);
+  assert.equal(sc.progress, null);
+  assert.match(sc.hint, /Trigger = YES/);
+  d.send('secondary');
+  d.send('move', { dir: 1 });
+  assert.doesNotMatch(d.s.screen(d.t).hint, /confirm/, 'no "confirm" hint while the rating is held');
+  d.wait(2000);
+  assert.match(d.s.screen(d.t).hint, /Trigger = confirm/);
+});
+
+test('questions after check-in are not held', () => {
+  const d = new Driver();
+  d.toRoundCheck();
+  assert.equal(d.s.screen(d.t).locked, false);
+  d.choose(0);
+  assert.equal(d.state, S.ROUND);
+});
 
 /* ---------------------------------------------------------------- check-in routing */
 

@@ -6,6 +6,7 @@ Unit tests are in `test/machine.test.js` and `test/eligibility.test.js` (`npm te
 | --- | --- | --- |
 | Crisis "yes" shows the crisis card and offers no exercise | crisis "yes" shows the crisis card, saves at once, and offers no exercise | Crisis card shown, saved at once, then the page asks real or test |
 | Check-in distress at or above the threshold, or feeling unreal: grounding only | distress at the threshold blocks the scene; one below is allowed in; feeling unreal blocks the scene | |
+| A check-in question takes no answer for its first 2 seconds | ignores both answers until 2 seconds; early "yes" to the crisis question; every question has its own hold; grounding button works at once during the hold; paused time does not count; hold restarts with check-in; held screen shows the hold; cannot be switched off or shortened | Buttons hammered through check-in: no question answered in under 2 s |
 | Tired, unwell or intoxicated: no session today | tired, unwell or intoxicated ends with "no session today"; unwell plus high distress | |
 | Grounding button, from any screen | mid-round; during check-in; during closure; no effect on terminal screens; sweep "grounding button" from every state | B mid-round fades to the real room and starts grounding |
 | Grounding steps cannot be skipped | each grounding step stays up for the minimum reading time | |
@@ -26,7 +27,7 @@ Unit tests are in `test/machine.test.js` and `test/eligibility.test.js` (`npm te
 | Hard limits on settings | settings are forced inside their hard limits | |
 | No screen may stall or wait without progress | timed states move on by the clock alone; every waiting screen shows progress or a hint | Spike page completes with pulse confirmations that never arrive |
 
-Each rule was also checked by breaking it on purpose: ten deliberate changes to the logic (for example, "upsetting no longer stops" or "pause shortened to 1 hour") each made at least one test fail.
+Each rule was also checked by breaking it on purpose: eighteen deliberate changes to the logic (for example, "upsetting no longer stops", "pause shortened to 1 hour" or "no hold on the grip answer") each made at least one test fail.
 
 Not covered yet, because they need the headset or later build steps: grounding exit timing on the device, ceilings on bilateral settings, channel sync, frame rate with the real scenes, offline use and comfort runs.
 

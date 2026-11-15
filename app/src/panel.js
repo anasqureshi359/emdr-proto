@@ -71,20 +71,21 @@ export function drawScreen(g, sc, extra = {}) {
   const footerTop = H - 96;
   if (sc.kind === 'yesno') {
     const bw = (W - 2 * pad - 40) / 2;
-    const by = footerTop - 150;
+    const by = footerTop - 172;
+    const held = !!sc.locked; // a held question shows its answers dimmed until they open
     for (const x of [pad, pad + bw + 40]) {
       roundRect(g, x, by, bw, 116, 16);
       g.fillStyle = C.cell; g.fill();
-      g.strokeStyle = C.quiet; g.lineWidth = 3; g.stroke();
+      g.strokeStyle = held ? C.line : C.quiet; g.lineWidth = 3; g.stroke();
     }
     // Both answers are drawn alike on purpose: neither one is nudged.
     g.textAlign = 'center';
     g.font = `700 46px ${FONT}`;
-    g.fillStyle = C.title;
+    g.fillStyle = held ? C.line : C.title;
     g.fillText(sc.yesLabel || 'YES', pad + bw / 2, by + 58);
     g.fillText(sc.noLabel || 'NO', pad + bw + 40 + bw / 2, by + 58);
     g.font = `28px ${FONT}`;
-    g.fillStyle = C.hint;
+    g.fillStyle = held ? C.line : C.hint;
     g.fillText('trigger', pad + bw / 2, by + 96);
     g.fillText('grip', pad + bw + 40 + bw / 2, by + 96);
     g.textAlign = 'left';

@@ -65,6 +65,7 @@ const TRIGGER_WORDS = {
 };
 
 const HINT_YESNO = 'Trigger = YES        Grip = NO';
+const HINT_HOLD = 'Read the question first';
 const HINT_CONTINUE = 'Trigger = continue';
 
 const clamp = (x, lo, hi) => Math.min(hi, Math.max(lo, x));
@@ -226,10 +227,14 @@ export function createSession({ config, now, profile }) {
   }
 
   const dwellDone = (t) => t - st.enteredAt >= cfg.minDwellMs;
+  // A check-in question takes no answer until it has been up long enough to read.
+  // The grounding button is not an answer and is never held back.
+  const holdDone = (t) => !CHECKIN_STATES.has(st.name) || t - st.enteredAt >= cfg.checkinHoldMs;
 
   function primary(t) {
     const d = st.data;
     if (READ_STATES.has(st.name) && !dwellDone(t)) return;
+    if (!holdDone(t)) return;
     switch (st.name) {
       case S.CHECK_CRISIS:
         rec.checkin.crisis = true;
@@ -314,6 +319,7 @@ export function createSession({ config, now, profile }) {
   }
 
   function secondary(t) {
+    if (!holdDone(t)) return;
     switch (st.name) {
       case S.CHECK_CRISIS:
         rec.checkin.crisis = false;
@@ -473,12 +479,16 @@ export function createSession({ config, now, profile }) {
       tone: 'normal',
       progress: null,
       canContinue: true,
+      locked: false,
       sceneVisible,
       paused: !!paused,
       showGroundingHint: !TERMINAL_SCREENS.has(st.name) && st.name !== S.GROUND,
     };
-    const yesno = (o) => ({ ...base, kind: 'yesno', hint: HINT_YESNO, yesLabel: 'YES', noLabel: 'NO', ...o });
-    const rating = (o) => ({ ...base, kind: 'rating', value: d.value == null ? null : d.value, hint: d.value == null ? 'Thumbstick left or right, or A / X, to choose' : 'Thumbstick or A / X = change        Trigger = confirm', ...o });
+    // Check-in questions: answers stay shut for the hold, with a bar that shows it running out.
+    const held = CHECKIN_STATES.has(st.name) && age < cfg.checkinHoldMs;
+    const hold = held ? { locked: true, canContinue: false, progress: age / cfg.checkinHoldMs } : {};
+    const yesno = (o) => ({ ...base, kind: 'yesno', hint: held ? HINT_HOLD : HINT_YESNO, yesLabel: 'YES', noLabel: 'NO', ...hold, ...o });
+    const rating = (o) => ({ ...base, kind: 'rating', value: d.value == null ? null : d.value, hint: d.value == null ? 'Thumbstick left or right, or A / X, to choose' : (held ? 'Thumbstick or A / X = change' : 'Thumbstick or A / X = change        Trigger = confirm'), ...hold, ...o });
     const read = (o) => {
       const ok = age >= cfg.minDwellMs;
       return { ...base, kind: 'read', canContinue: ok, progress: ok ? null : age / cfg.minDwellMs, hint: ok ? HINT_CONTINUE : '', ...o };

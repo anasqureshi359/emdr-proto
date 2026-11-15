@@ -8,7 +8,7 @@ import { createStore } from './store.js';
 import { createXrView } from './xr.js';
 import { PANEL_W, PANEL_H, drawScreen } from './panel.js';
 
-const VERSION = 'safety-shell 0.1';
+const VERSION = 'safety-shell 0.2';
 const $ = (id) => document.getElementById(id);
 const errText = (e) => String((e && e.message) || e);
 const clone = (x) => JSON.parse(JSON.stringify(x));
@@ -71,7 +71,7 @@ function redraw(force) {
   run.lastDrawAt = t;
   const sc = run.machine.screen(clockNow());
   const corner = run.mode === 'preview' ? 'preview' : (run.fps.value ? Math.round(run.fps.value / 5) * 5 + ' fps' : '');
-  const key = JSON.stringify([sc.state, sc.title, sc.body, sc.kind, sc.hint, sc.value, sc.selected, sc.paused, sc.canContinue, sc.progress == null ? null : Math.round(sc.progress * 30), corner]);
+  const key = JSON.stringify([sc.state, sc.title, sc.body, sc.kind, sc.hint, sc.value, sc.selected, sc.paused, sc.canContinue, sc.locked, sc.progress == null ? null : Math.round(sc.progress * 30), corner]);
   if (key === run.lastDrawKey) return;
   run.lastDrawKey = key;
   if (run.mode === 'xr') {
@@ -105,11 +105,15 @@ function monitorFrameRate(dt) {
     return;
   }
   if (!(dt > 0) || dt > 1000) return;
+  f.frames += 1;
+  f.timeMs += dt;
+  if (f.reported == null && view.frameRate) f.reported = view.frameRate; // the Quest browser may not report a rate at the start
   f.dts.push(dt);
   f.sum += dt;
   while (f.dts.length > 1 && f.sum - f.dts[0] >= config.frameRateWindowMs) f.sum -= f.dts.shift();
   f.value = (1000 * f.dts.length) / f.sum;
   const settled = performance.now() - f.since >= config.frameRateWindowMs + 1500 && f.sum >= config.frameRateWindowMs * 0.95;
+  if (settled && (f.lowest == null || f.value < f.lowest)) f.lowest = f.value;
   // Re-arms after 10 s, so a slow spell during check-in cannot hide a later one mid-exercise.
   if (settled && !f.off && f.value < f.floor && performance.now() - f.faultedAt > 10000) {
     f.faultedAt = performance.now();
@@ -145,11 +149,32 @@ function emergency(e) {
   setTimeout(() => { if (run === r) r.leave(); }, 5000);
 }
 
+/**
+ * Frame rate for the record. "average" covers every frame drawn while the session was
+ * visible; "lowest" is the lowest 2-second average, the same figure the monitor judges.
+ */
+function frameRateSummary(r) {
+  const f = r.fps;
+  const r1 = (x) => Math.round(x * 10) / 10;
+  return {
+    reported: f.reported || null,
+    average: f.timeMs > 0 ? r1((1000 * f.frames) / f.timeMs) : null,
+    lowest: f.lowest == null ? null : r1(f.lowest),
+    floor: r1(f.floor),
+    measuredSeconds: Math.round(f.timeMs / 1000),
+  };
+}
+
+function withDevice(rec) {
+  rec.app = VERSION;
+  if (run.info) rec.device = { ...run.info, frameRate: run.fps.reported || run.info.frameRate || null };
+  if (run.mode === 'xr') rec.frameRate = frameRateSummary(run);
+  return rec;
+}
+
 function persist() {
   if (!run) return;
-  const rec = clone(run.machine.record);
-  rec.app = VERSION;
-  if (run.info) rec.device = run.info;
+  const rec = withDevice(clone(run.machine.record));
   if (run.mode === 'preview') { lastPreview = rec; return; }
   run.saved = true;
   const i = history.findIndex((r) => r.id === rec.id);
@@ -159,8 +184,7 @@ function persist() {
 
 function snapshot() {
   if (!run || run.mode !== 'xr' || run.saved) return;
-  const rec = clone(run.machine.record);
-  rec.app = VERSION;
+  const rec = withDevice(clone(run.machine.record));
   store.set('current', rec).catch(() => {});
 }
 
@@ -192,7 +216,7 @@ function newRun(mode, machine, extra) {
     lastDrawKey: '',
     saved: false,
     info: null,
-    fps: { dts: [], sum: 0, value: 0, since: performance.now(), faultedAt: -1e9, floor: config.frameRateFloor, off: false },
+    fps: { dts: [], sum: 0, value: 0, since: performance.now(), faultedAt: -1e9, floor: config.frameRateFloor, off: false, frames: 0, timeMs: 0, lowest: null, reported: null },
     stallFaulted: false,
     ...extra,
   };
@@ -215,7 +239,7 @@ async function startXr() {
     const machine = createSession({ config, now: Date.now(), profile: e.profile });
     run = newRun('xr', machine, { fade: (to, ms) => view.fadeTo(to, ms), leave: () => view.end() });
     run.info = info;
-    if (info.frameRate) run.fps.floor = Math.min(config.frameRateFloor, info.frameRate * 0.9 - 1);
+    if (info.frameRate) { run.fps.reported = info.frameRate; run.fps.floor = Math.min(config.frameRateFloor, info.frameRate * 0.9 - 1); }
     if (window.__SHELL_TEST_NO_FRAME_RATE_FAULT) {
       // Only the emulator tests set this: software rendering runs at a few frames a second.
       run.fps.off = true;
@@ -413,7 +437,7 @@ function download(name, text, type) {
 }
 
 function csv() {
-  const cols = ['id', 'started', 'minutes', 'profile', 'route', 'checkin_distress', 'checkin_unreal', 'baseline_calm', 'closing_distress', 'closing_calm', 'rounds', 'round_answers', 'sets_ended', 'stop', 'flags', 'real_or_test', 'body_check_positive', 'faults', 'completed', 'ended_early'];
+  const cols = ['id', 'started', 'minutes', 'profile', 'route', 'checkin_distress', 'checkin_unreal', 'baseline_calm', 'closing_distress', 'closing_calm', 'rounds', 'round_answers', 'sets_ended', 'stop', 'flags', 'real_or_test', 'body_check_positive', 'faults', 'completed', 'ended_early', 'fps_average', 'fps_lowest'];
   const q = (v) => { const s = v === undefined || v === null ? '' : String(v); return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
   const lines = [cols.join(',')];
   for (const r of history) {
@@ -423,6 +447,7 @@ function csv() {
       (r.rounds || []).length, (r.rounds || []).map((x) => x.answer || '').join(' '), r.setsEnded, r.stop && r.stop.trigger,
       (r.flags || []).map((f) => f.trigger).join(' '), r.real === true ? 'real' : r.real === false ? 'test' : '', r.body && r.body.positive,
       (r.faults || []).map((f) => f.kind).join(' '), r.completed, r.endedEarly,
+      r.frameRate && r.frameRate.average, r.frameRate && r.frameRate.lowest,
     ].map(q).join(','));
   }
   return lines.join('\n');
@@ -499,6 +524,7 @@ function wire() {
     renderAll();
   });
 
+  $('versionText').textContent = VERSION;
   $('btnJson').addEventListener('click', () => download('session-log.json', JSON.stringify({ app: VERSION, exportedAt: new Date().toISOString(), config: { profile: config.profile, sessionMinutes: config.sessionMinutes, distressBlock: config.distressBlock, flagRise: config.flagRise }, sessions: history }, null, 1), 'application/json'));
   $('btnCsv').addEventListener('click', () => download('session-log.csv', csv(), 'text/csv'));
   $('btnClear').addEventListener('click', () => { $('clearConfirm').hidden = false; });
