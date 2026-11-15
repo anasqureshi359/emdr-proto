@@ -1,27 +1,37 @@
 # emdr-proto
 
-Prototype work for a WebXR app that runs in the Meta Quest browser.
+Prototype work for a WebXR app that runs in the Meta Quest browser. Each build is one self-contained page, served by GitHub Pages.
 
-## Headset spike
+| Path | What it is |
+| --- | --- |
+| `index.html` | Landing page with links to the builds |
+| `app/` | Safety shell (build step 3) |
+| `spike/` | Headset spike (build step 2) |
 
-`index.html` is a single self-contained test page. It runs seven technical checks on the headset and contains no exercise content:
+## Safety shell (`app/`)
 
-1. Fading from an opaque scene to passthrough inside one session
-2. The largest panorama texture the browser will load
-3. Controller haptics
-4. Left and right tone separation
-5. Whether stored data survives browser updates
-6. Controller button mapping and the system menu
-7. Getting a results file off the headset
+Check-in, stop rules, the grounding exit, closure and the session log, in an empty scene. There are no exercises and no stimulation in this build. Three empty rounds stand in for the exercises so that every stop rule can be triggered.
 
-Open the page over https in the Quest browser, press Start, and answer with the controllers. Results stay in the browser until you copy them out. "Preview on this screen" walks through the same checks on a phone or desktop.
+- `src/core/` holds the session logic as pure code: `machine.js` (the session state machine), `eligibility.js` (the pause, caps and lock rules) and `config.js` (defaults and hard limits).
+- `src/xr.js` is the headset view, `src/panel.js` draws each screen, `src/store.js` keeps the log in IndexedDB on the device, and `src/main.js` wires the page.
+- `test/` has 55 automated tests, at least one for every stop rule, plus a sweep that fires each trigger from every state.
+- `TRACE.md` maps each stop rule to the tests that cover it.
 
-## Rebuilding
+```
+cd app
+npm install
+npm test         # the safety logic tests
+npm run build    # writes app/index.html
+```
 
-The source is in `spike/`. The build bundles three.js into the page and writes `index.html` at the repo root.
+The session log stays in the browser on the headset until it is downloaded from the page. Wording on every screen is a draft.
+
+## Headset spike (`spike/`)
+
+Seven technical checks with no exercise content: passthrough fade, panorama size, haptics, tone separation, stored data, button mapping and getting results off the headset. Version 0.2 no longer waits for the browser to confirm a haptic pulse, which stalled version 0.1 on the Quest 3.
 
 ```
 cd spike
 npm install
-npm run build
+npm run build    # writes spike/index.html
 ```

@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Safety shell</title>
+<style>
+  :root {
+    --bg: #f6f5f1; --card: #ffffff; --ink: #1c1e21; --muted: #5d6470; --line: #d9d6cd;
+    --accent: #1f5fae; --accent-ink: #ffffff; --warn-bg: #fff3d6; --warn-line: #e2b23c;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #14161a; --card: #1d2026; --ink: #eceef1; --muted: #a2a9b4; --line: #343943;
+      --accent: #6ea8ff; --accent-ink: #0c1420; --warn-bg: #3a2f12; --warn-line: #8f6f1c;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font: 18px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  main { max-width: 900px; margin: 0 auto; padding: 24px 20px 64px; }
+  h1 { font-size: 30px; margin: 0 0 4px; }
+  h2 { font-size: 22px; margin: 0 0 10px; }
+  h3 { font-size: 18px; margin: 18px 0 8px; }
+  p { margin: 0 0 12px; }
+  .sub { color: var(--muted); margin-bottom: 20px; }
+  section { background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 20px; margin-bottom: 18px; }
+  .row { display: flex; flex-wrap: wrap; gap: 12px; margin: 14px 0 6px; }
+  button { font: inherit; font-weight: 600; min-height: 56px; padding: 0 22px; border-radius: 10px; border: 2px solid var(--line); background: var(--card); color: var(--ink); cursor: pointer; }
+  button.primary, button.on { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+  button:disabled { opacity: 0.45; cursor: not-allowed; }
+  button:focus-visible, input:focus-visible { outline: 3px solid var(--accent); outline-offset: 2px; }
+  .note { color: var(--muted); font-size: 16px; min-height: 1.2em; }
+  .strong { font-weight: 600; }
+  #banner, #problems { background: var(--warn-bg); border: 1px solid var(--warn-line); border-radius: 12px; padding: 14px 18px; margin-bottom: 18px; }
+  #banner p:last-child { margin-bottom: 0; }
+  table { width: 100%; border-collapse: collapse; font-size: 16px; }
+  th, td { text-align: left; vertical-align: top; padding: 9px 10px; border-top: 1px solid var(--line); }
+  thead th { border-top: 0; color: var(--muted); font-weight: 600; white-space: nowrap; }
+  .scroll { overflow-x: auto; }
+  label.ack { display: flex; gap: 12px; align-items: flex-start; margin: 10px 0; }
+  label.ack input { width: 26px; height: 26px; flex: none; margin-top: 2px; }
+  #previewStage { position: relative; border-radius: 10px; overflow: hidden; border: 1px solid var(--line); padding: 7% 9%;
+    background-color: #9aa3ad;
+    background-image: linear-gradient(45deg, #7f8892 25%, transparent 25%, transparent 75%, #7f8892 75%), linear-gradient(45deg, #7f8892 25%, transparent 25%, transparent 75%, #7f8892 75%);
+    background-size: 48px 48px; background-position: 0 0, 24px 24px; }
+  #previewScene { position: absolute; inset: 0; opacity: 0; transition: opacity 1s linear;
+    background: linear-gradient(#16203a 0%, #4a5078 38%, #d49a76 49%, #5a5560 51%, #23262e 58%, #101216 100%); }
+  #previewPanel { position: relative; display: block; width: 100%; height: auto; border-radius: 6px; }
+  #previewText { margin: 12px 0 0; padding: 12px 14px; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; font: inherit; font-size: 16px; white-space: pre-wrap; min-height: 6em; }
+  .pad button { min-height: 48px; padding: 0 16px; }
+  ul { margin: 0 0 12px; padding-left: 22px; }
+  footer { color: var(--muted); font-size: 14px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Safety shell</h1>
+  <p class="sub">Build step 3: check-in, stop rules, grounding exit, closure and the session log. There are no exercises and no stimulation in this build.</p>
+
+  <div id="problems" hidden></div>
+  <div id="banner" hidden></div>
+
+  <section id="onboarding" hidden>
+    <h2>First-time questions</h2>
+    <p>Only the fact that you completed this is saved, not your answers.</p>
+    <h3>Have you ever had a seizure, a blackout or a loss of awareness?</h3>
+    <div class="row"><button id="obSeizureNo">No</button><button id="obSeizureYes">Yes</button></div>
+    <div id="obCleared" hidden>
+      <h3>Has a doctor said it is fine for you to use a VR headset?</h3>
+      <div class="row"><button id="obClearedYes">Yes</button><button id="obClearedNo">No</button></div>
+    </div>
+    <p id="obBlocked" class="strong" hidden>Check with a doctor before using the headset. The app stays locked until then.</p>
+    <div id="obAcks" hidden>
+      <label class="ack"><input type="checkbox" id="ack1"><span>I will stay seated for the whole session.</span></label>
+      <label class="ack"><input type="checkbox" id="ack2"><span>I can take the headset off at any moment, and doing so is always fine.</span></label>
+      <label class="ack"><input type="checkbox" id="ack3"><span>Pressing B or Y stops the session and starts grounding in my real room.</span></label>
+      <div class="row"><button id="btnOnboard" class="primary" disabled>Continue</button></div>
+    </div>
+  </section>
+
+  <section>
+    <h2>Session</h2>
+    <p>Sit down with both controllers. The session starts with four check-in questions in your real room.</p>
+    <div class="row">
+      <button id="btnStart" class="primary" disabled>Start session</button>
+      <button id="btnPreview">Preview on this screen</button>
+    </div>
+    <label class="ack"><input type="checkbox" id="fast"><span>Run the preview at 10× speed</span></label>
+    <p id="envNote" class="note"></p>
+    <p id="startNote" class="note"></p>
+    <p id="statusLine" class="note"></p>
+  </section>
+
+  <section id="previewWrap" hidden>
+    <h2>On-screen preview</h2>
+    <p class="note">The same session logic, drawn on this screen. The checkerboard stands for your real room. Preview sessions are not saved to the log.</p>
+    <div id="previewStage"><div id="previewScene"></div><canvas id="previewPanel"></canvas></div>
+    <pre id="previewText" aria-live="polite"></pre>
+    <div class="row pad">
+      <button data-in="primary" class="primary">Trigger</button>
+      <button data-in="secondary">Grip</button>
+      <button data-in="up">◀ ▲ (X)</button>
+      <button data-in="down">▶ ▼ (A)</button>
+      <button data-in="grounding">B / Y: ground</button>
+    </div>
+    <div class="row pad">
+      <button data-in="menu">System menu, 3 s</button>
+      <button data-in="off">Headset off, 3 s</button>
+      <button data-in="fault">Frame-rate fault</button>
+      <button id="btnStopPreview">Stop preview</button>
+    </div>
+  </section>
+
+  <section id="logSection">
+    <h2>Session log</h2>
+    <p id="previewResult" class="note" hidden></p>
+    <p id="logEmpty" class="note">No sessions yet.</p>
+    <div class="scroll">
+      <table id="logTable" hidden>
+        <thead><tr><th>Started</th><th>Length</th><th>Route</th><th>Distress</th><th>Calm</th><th>Notes</th></tr></thead>
+        <tbody id="logRows"></tbody>
+      </table>
+    </div>
+    <div class="row">
+      <button id="btnJson">Download log (JSON)</button>
+      <button id="btnCsv">Download log (CSV)</button>
+      <button id="btnClear">Clear log</button>
+    </div>
+    <div id="clearConfirm" hidden>
+      <p class="strong">Clear every session from the log on this device? This also clears any 4-hour pause.</p>
+      <div class="row"><button id="btnClearYes">Yes, clear it</button><button id="btnClearNo">Cancel</button></div>
+    </div>
+    <p id="exportNote" class="note"></p>
+    <p id="storageNote" class="note"></p>
+  </section>
+
+  <section>
+    <h2>In this build</h2>
+    <ul>
+      <li>Check-in routes: crisis card, grounding only, no session today, or the full session.</li>
+      <li>Three empty rounds stand in for the exercises, each followed by the check question.</li>
+      <li>B or Y at any time: the scene fades to your real room and the grounding steps start.</li>
+      <li>Flagged sessions ask whether the stop was real or a test. A real one pauses the app for 4 hours.</li>
+      <li>The crisis card shows sample therapist details. The 988 and 911 lines are real.</li>
+    </ul>
+    <p class="note">Wording on every screen is a draft until the therapist approves the scripts.</p>
+  </section>
+
+  <footer>safety-shell 0.1 · the log stays in this browser until you download it</footer>
+</main>
+<!-- Includes three.js r170 (https://threejs.org), MIT License, Copyright 2010-2024 three.js authors. -->
+<script>/*__BUNDLE__*/</script>
+</body>
+</html>
