@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 
-const VERSION = 'quest-spike 0.1';
+const VERSION = 'quest-spike 0.2';
 const LS_RESULTS = 'questSpike.results';
 const LS_CRUMB = 'questSpike.crumb';
 const $ = (id) => document.getElementById(id);
@@ -597,6 +597,25 @@ function pulse(hand, intensity, ms) {
   }
 }
 
+function trackPulse(promise) {
+  const rec = { result: 'no reply yet', replyMs: null };
+  const t0 = performance.now();
+  promise.then((r) => {
+    rec.result = r;
+    rec.replyMs = Math.round(performance.now() - t0);
+    if (results) save();
+  });
+  return rec;
+}
+
+// Resolves with the promise, or with `fallback` after `ms`, whichever comes first.
+function withTimeout(promise, ms, fallback) {
+  return Promise.race([
+    promise,
+    new Promise((resolve) => setTimeout(() => resolve(fallback), ms)),
+  ]);
+}
+
 /* ------------------------------------------------------------------ the checks */
 
 function makeCtx(mode, session, myRun) {
@@ -714,11 +733,13 @@ async function stepHaptics(ctx) {
     do {
       ctx.say(K, pct + '% strength', ['One pulse in the left hand, then one in the right.'], '');
       await ctx.sleep(900);
-      const a = ctx.pulse('left', level, 60);
+      // Never wait for the browser to confirm a pulse: on the Quest that
+      // confirmation can arrive very late. Record how long it takes instead.
+      const a = trackPulse(ctx.pulse('left', level, 60));
       await ctx.sleep(700);
-      const b = ctx.pulse('right', level, 60);
+      const b = trackPulse(ctx.pulse('right', level, 60));
       await ctx.sleep(500);
-      api = [await a, await b];
+      api = [a, b];
       ctx.say(K, 'Felt it in both hands?', ['That was the ' + pct + '% pulse.'], HINT_YNR);
       answer = await ctx.choice(['yes', 'no', 'repeat']);
     } while (answer === 'repeat');
@@ -760,7 +781,7 @@ async function stepAudio(ctx) {
     return;
   }
   if (audio.state === 'suspended') {
-    try { await audio.resume(); } catch (e) { /* ignore */ }
+    try { await withTimeout(audio.resume(), 1500, null); } catch (e) { /* ignore */ }
   }
   t.state = audio.state;
   t.sampleRate = audio.sampleRate;
@@ -873,8 +894,8 @@ async function stepPerf(ctx) {
     t.supportedFrameRates = s.supportedFrameRates ? Array.from(s.supportedFrameRates) : null;
     if (s.updateTargetFrameRate && t.supportedFrameRates && t.supportedFrameRates.includes(90) && s.frameRate !== 90) {
       try {
-        await s.updateTargetFrameRate(90);
-        t.requested90 = 'accepted';
+        const reply = await withTimeout(s.updateTargetFrameRate(90).then(() => 'accepted'), 2000, 'no reply in 2 s');
+        t.requested90 = reply;
         await ctx.sleep(800);
         t.measuredAt90 = await ctx.measure(3000);
       } catch (e) {
@@ -1130,7 +1151,7 @@ function verdicts(r) {
       n: 3,
       name: 'Haptics',
       status: t.haptics.pass ? 'pass' : 'fail',
-      detail: `weakest pulse felt: ${t.haptics.weakestFelt === null ? 'none' : Math.round(t.haptics.weakestFelt * 100) + '%'}; alternating even: ${yn(t.haptics.alternatingEven)}; timer jitter ${t.haptics.timerJitterMs} ms`,
+      detail: `weakest pulse felt: ${t.haptics.weakestFelt === null ? 'none' : Math.round(t.haptics.weakestFelt * 100) + '%'}; alternating even: ${yn(t.haptics.alternatingEven)}; timer jitter ${t.haptics.timerJitterMs} ms; pulse confirmations took ${pulseReplies(t.haptics)}`,
       inHeadset: true,
     });
   }
@@ -1196,6 +1217,16 @@ function verdicts(r) {
     });
   }
   return v;
+}
+
+function pulseReplies(h) {
+  const all = [];
+  for (const l of h.levels || []) for (const a of l.api || []) all.push(a);
+  if (!all.length) return 'n/a';
+  const got = all.filter((a) => a && typeof a.replyMs === 'number').map((a) => a.replyMs);
+  const pending = all.length - got.length;
+  const part = got.length ? Math.min(...got) + ' to ' + Math.max(...got) + ' ms' : 'no replies yet';
+  return pending ? part + ' (' + pending + ' still pending)' : part;
 }
 
 function shortSummary(r) {
