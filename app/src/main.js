@@ -1,4 +1,4 @@
-// Page wiring for the safety shell: start and run a session (in the headset or as an
+// Page wiring: start and run a session (in the headset or as an
 // on-screen preview), keep the log, and enforce the start rules.
 
 import { createSession, S } from './core/machine.js';
@@ -7,15 +7,19 @@ import { eligibility, needsAnswer } from './core/eligibility.js';
 import { createStore } from './store.js';
 import { createXrView } from './xr.js';
 import { PANEL_W, PANEL_H, drawScreen } from './panel.js';
+import { createAudio } from './audio.js';
 
-const VERSION = 'safety-shell 0.2';
+const VERSION = 'stabilization-app 0.3';
+const LAKE_PHOTO = 'assets/lakeshore.jpg'; // optional: a licensed 360° photo replaces the painted lakeshore
+const EXERCISE_NAMES = { 'breathing': 'paced breathing', 'calm-place': 'calm place', 'grounding': 'grounding', 'bench': 'engine test' };
 const $ = (id) => document.getElementById(id);
 const errText = (e) => String((e && e.message) || e);
 const clone = (x) => JSON.parse(JSON.stringify(x));
 
 let store = null;
 let history = [];
-let config = normalizeConfig({});
+let settings = { scene: 'room', cueWord: 'calm', renderScale: 1, sceneSound: true };
+let config = normalizeConfig(settings);
 let onboarded = false;
 let run = null;
 let lastPreview = null;
@@ -23,6 +27,7 @@ let view = null;
 let previewTimer = null;
 let backupTimer = null;
 const problems = [];
+const audio = createAudio({ onProblem: (text) => problem(text) });
 
 function problem(text) {
   problems.push(new Date().toISOString().slice(11, 19) + ' ' + text);
@@ -50,8 +55,13 @@ function afterDispatch(force) {
   if (!run) return;
   const m = run.machine;
   for (const e of m.drainEffects()) {
-    if (e.type === 'fade') run.fade(e.to, e.ms);
-    else if (e.type === 'save') persist();
+    if (e.type === 'fade') {
+      run.fade(e.to, e.ms);
+      // scene sound follows the scene: on as it fades in, off at once as it fades out
+      audio.setAmbient(e.to > 0 && config.sceneSound ? (m.record.scene || config.scene) : null);
+    } else if (e.type === 'stim') {
+      if (e.on) stimStart(); else stimStop();
+    } else if (e.type === 'save') persist();
     else if (e.type === 'end') { run.leave(); return; }
   }
   if (!run) return;
@@ -64,6 +74,70 @@ function afterDispatch(force) {
   redraw(force);
 }
 
+/* ------------------------------------------------------------------ light, tone and pulse */
+
+const turnAt = (s, k) => s.t0 + (k + 0.5) * (s.passMs / 2); // turn k: even = right, odd = left
+
+function stimStart() {
+  if (!run) return;
+  const s = run.machine.stimulus();
+  if (!s) return;
+  const now = clockNow();
+  const key = run.machine.record.rounds.length;
+  if (run.stim.key !== key) run.stim = { key, nextTone: 0, nextPulse: 0, tones: 0, toneLateMax: 0, pulses: 0, frameGapMax: 0, startedWall: performance.now() };
+  // After a pause the timeline has moved: pick up at the next turn still ahead.
+  let k = 0;
+  while (k < s.passes * 2 && turnAt(s, k) <= now) k++;
+  run.stim.nextTone = Math.max(run.stim.nextTone, k);
+  run.stim.nextPulse = Math.max(run.stim.nextPulse, k);
+  audio.stimOn();
+}
+
+function stimStop() {
+  audio.stimOff(); // first, before anything else
+  if (!run) return;
+  run.setVisual({ kind: 'none' });
+  const rounds = run.machine.record.rounds;
+  const r = rounds[rounds.length - 1];
+  const st = run.stim;
+  if (r && r.set && st.key === rounds.length) {
+    r.set.sync = {
+      tones: st.tones,
+      toneLateMaxMs: Math.round(st.toneLateMax),
+      pulses: st.pulses,
+      frameGapMaxMs: Math.round(st.frameGapMax),
+      outputDelayMs: Math.round(audio.latencyMs()),
+      sound: audio.running,
+    };
+  }
+}
+
+/** Runs every frame: moves the light, schedules the tone ahead of time, fires the pulse. */
+function stimFrame(dt) {
+  if (!run) return;
+  const now = clockNow();
+  run.setVisual(run.machine.visual(now));
+  const s = run.machine.stimulus();
+  if (!s) return;
+  const st = run.stim;
+  const speed = run.speed || 1;
+  const total = s.passes * 2;
+  if (dt > 0 && now >= s.t0) st.frameGapMax = Math.max(st.frameGapMax, dt);
+  // The tone is scheduled up to 220 ms ahead, because sound leaves the headset late.
+  while (st.nextTone < total && turnAt(s, st.nextTone) - now < 220 * speed) {
+    const k = st.nextTone++;
+    const inMs = (turnAt(s, k) - now) / speed;
+    if (inMs < -40 || !s.channels.tone) continue;
+    const late = audio.chime(Math.max(0, inMs), k % 2 === 0 ? 1 : -1);
+    if (late !== null) { st.tones += 1; st.toneLateMax = Math.max(st.toneLateMax, late); }
+  }
+  // A pulse cannot be scheduled ahead, so it fires on the frame its turn falls in.
+  while (st.nextPulse < total && turnAt(s, st.nextPulse) <= now) {
+    const k = st.nextPulse++;
+    if (s.channels.pulse && now - turnAt(s, k) < 60 * speed && run.pulse && run.pulse(k % 2 === 0 ? 1 : -1, 0.2, 60)) st.pulses += 1;
+  }
+}
+
 function redraw(force) {
   if (!run) return;
   const t = performance.now();
@@ -71,7 +145,7 @@ function redraw(force) {
   run.lastDrawAt = t;
   const sc = run.machine.screen(clockNow());
   const corner = run.mode === 'preview' ? 'preview' : (run.fps.value ? Math.round(run.fps.value / 5) * 5 + ' fps' : '');
-  const key = JSON.stringify([sc.state, sc.title, sc.body, sc.kind, sc.hint, sc.value, sc.selected, sc.paused, sc.canContinue, sc.locked, sc.progress == null ? null : Math.round(sc.progress * 30), corner]);
+  const key = JSON.stringify([sc.state, sc.title, sc.body, sc.kind, sc.hint, sc.value, sc.selected, sc.paused, sc.canContinue, sc.locked, sc.layout, sc.progress == null ? null : Math.round(sc.progress * 30), corner]);
   if (key === run.lastDrawKey) return;
   run.lastDrawKey = key;
   if (run.mode === 'xr') {
@@ -125,19 +199,23 @@ function onFrame(dt) {
   if (!run || run.mode !== 'xr') return;
   monitorFrameRate(dt);
   send('tick');
+  stimFrame(dt);
 }
 
 function onVisibility(state) {
   if (!run) return;
   if (state === 'visible') { run.fps.dts = []; run.fps.sum = 0; run.fps.since = performance.now(); }
+  audio.setHidden(state !== 'visible'); // no sound while the user cannot see the session
   send('visibility', { state });
 }
 
 /** The logic itself failed. Get the user to the real room and out. */
 function emergency(e) {
   problem('internal error: ' + errText(e));
+  audio.allOff();
   const r = run;
   if (!r) return;
+  try { r.setVisual({ kind: 'none' }); } catch (err) { /* ignore */ }
   try { r.machine.abort(clockNow(), 'internal error: ' + errText(e)); } catch (err) { /* nothing more to do */ }
   try { persist(); } catch (err) { /* ignore */ }
   try { r.fade(0, 500); } catch (err) { /* ignore */ }
@@ -168,6 +246,7 @@ function frameRateSummary(r) {
 function withDevice(rec) {
   rec.app = VERSION;
   if (run.info) rec.device = { ...run.info, frameRate: run.fps.reported || run.info.frameRate || null };
+  rec.settings = { scene: config.scene, renderScale: config.renderScale, sceneSound: config.sceneSound, lakePhoto: !!pageEnv.lakePhoto, setsInCalmPlace: run.machine.setsInCalmPlace };
   if (run.mode === 'xr') rec.frameRate = frameRateSummary(run);
   return rec;
 }
@@ -194,7 +273,13 @@ function finishRun() {
   if (r.machine.state !== S.ENDED) {
     try { r.machine.abort(clockNow(), r.mode === 'xr' ? 'headset session closed' : 'preview stopped'); } catch (e) { problem('abort failed: ' + errText(e)); }
   }
-  for (const e of r.machine.drainEffects()) if (e.type === 'save') persist();
+  audio.allOff();
+  audio.setHidden(false);
+  try { r.setVisual({ kind: 'none' }); } catch (e) { /* ignore */ }
+  for (const e of r.machine.drainEffects()) {
+    if (e.type === 'save') persist();
+    else if (e.type === 'stim' && !e.on) stimStop();
+  }
   if (r.mode === 'xr' && r.saved) persist(); // write the final details of a record already saved
   run = null;
   clearInterval(previewTimer);
@@ -218,6 +303,9 @@ function newRun(mode, machine, extra) {
     info: null,
     fps: { dts: [], sum: 0, value: 0, since: performance.now(), faultedAt: -1e9, floor: config.frameRateFloor, off: false, frames: 0, timeMs: 0, lowest: null, reported: null },
     stallFaulted: false,
+    stim: { key: -1, nextTone: 0, nextPulse: 0, tones: 0, toneLateMax: 0, pulses: 0, frameGapMax: 0 },
+    setVisual: () => {},
+    pulse: null,
     ...extra,
   };
 }
@@ -226,6 +314,7 @@ async function startXr() {
   if (run) return;
   const e = eligibility({ config, history, now: Date.now() });
   if (!e.canStart || !onboarded) return;
+  audio.unlock(); // inside the button press, so the browser allows sound
   let session;
   try {
     session = await navigator.xr.requestSession('immersive-ar', { optionalFeatures: ['local-floor'] });
@@ -235,10 +324,10 @@ async function startXr() {
   }
   try {
     if (!view) view = createXrView({ onInput, onFrame, onVisibility, onEnd: finishRun, onProblem: problem });
-    const info = await view.begin(session);
-    const machine = createSession({ config, now: Date.now(), profile: e.profile });
-    run = newRun('xr', machine, { fade: (to, ms) => view.fadeTo(to, ms), leave: () => view.end() });
-    run.info = info;
+    const info = await view.begin(session, { scene: config.scene, renderScale: config.renderScale, lakePhotoUrl: pageEnv.lakePhoto ? LAKE_PHOTO : null });
+    const machine = createSession({ config, now: Date.now(), profile: e.profile, setsLocked: e.setsLocked });
+    run = newRun('xr', machine, { fade: (to, ms) => view.fadeTo(to, ms), leave: () => view.end(), setVisual: (v) => view.setVisual(v), pulse: (side, strength, ms) => view.pulse(side, strength, ms) });
+    run.info = { ...info, renderScale: config.renderScale };
     if (info.frameRate) { run.fps.reported = info.frameRate; run.fps.floor = Math.min(config.frameRateFloor, info.frameRate * 0.9 - 1); }
     if (window.__SHELL_TEST_NO_FRAME_RATE_FAULT) {
       // Only the emulator tests set this: software rendering runs at a few frames a second.
@@ -274,25 +363,50 @@ function previewFade(to, ms) {
   el.style.opacity = String(to);
 }
 
+function previewVisual(v) {
+  const el = $('previewLight');
+  if (!v || v.kind === 'none') { el.style.opacity = '0'; return; }
+  el.style.opacity = String(Math.min(1, v.alpha));
+  if (v.kind === 'sweep') {
+    const half = ($('previewLightRow').clientWidth || 600) / 2 - 40;
+    el.style.transform = `translateX(${(v.x * (v.deg / 30) * half).toFixed(1)}px) scale(1)`;
+  } else {
+    el.style.transform = `translateX(0px) scale(${(0.6 + 0.9 * v.level).toFixed(3)})`;
+  }
+}
+
 function startPreview() {
   if (run) return;
+  audio.unlock();
   const e = eligibility({ config, history, now: Date.now() });
   const speed = $('fast').checked ? 10 : 1;
   const base = Date.now();
   const p0 = performance.now();
   const clock = () => base + (performance.now() - p0) * speed;
-  const machine = createSession({ config, now: clock(), profile: e.profile });
+  const machine = createSession({ config, now: clock(), profile: e.profile, setsLocked: e.setsLocked });
   const canvas = $('previewPanel');
+  $('previewScene').className = config.scene;
   canvas.width = PANEL_W;
   canvas.height = PANEL_H;
   $('previewWrap').hidden = false;
   $('previewScene').style.transitionDuration = '0ms';
   $('previewScene').style.opacity = '0';
-  run = newRun('preview', machine, { fade: previewFade, leave: finishRun, speed, previewCtx: canvas.getContext('2d') });
+  run = newRun('preview', machine, { fade: previewFade, leave: finishRun, speed, previewCtx: canvas.getContext('2d'), setVisual: previewVisual });
   run.clock = clock;
   redraw(true);
   renderAll();
   previewTimer = setInterval(() => send('tick'), 100);
+  // The light and the tone run on their own, faster loop, as they do on headset frames.
+  const mine = run;
+  let lastLoop = performance.now();
+  const loop = () => {
+    if (run !== mine) return;
+    const t = performance.now();
+    stimFrame((t - lastLoop) * speed);
+    lastLoop = t;
+    requestAnimationFrame(loop);
+  };
+  requestAnimationFrame(loop);
   try { $('previewWrap').scrollIntoView(); } catch (err) { /* ignore */ }
 }
 
@@ -300,7 +414,8 @@ function startPreview() {
 
 const fmtTime = (ms) => new Date(ms).toLocaleString([], { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
 const fmtClock = (ms) => new Date(ms).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
-const ROUTES = { 'full': 'Full session', 'grounding-only': 'Grounding only', 'crisis-card': 'Crisis card', 'not-today': 'Not today', 'ended-in-check-in': 'Left during check-in' };
+const routeText = (r) => (r.route === 'full' && r.exercise ? 'Session: ' + (EXERCISE_NAMES[r.exercise] || r.exercise) : (ROUTES[r.route] || r.route || 'no route'));
+const ROUTES = { 'full': 'Full session, ended before an exercise', 'grounding-only': 'Grounding only', 'crisis-card': 'Crisis card', 'not-today': 'Not today', 'ended-in-check-in': 'Left during check-in' };
 const TRIGGERS = { 'grounding-button': 'grounding button', 'upsetting': 'something upsetting', 'worse-twice': 'worse twice', 'closing-distress': 'high closing distress', 'body-check': 'body check', 'crisis': 'crisis card', 'headset-off': 'headset off' };
 const trig = (t) => TRIGGERS[t] || String(t).replace('fault:', 'fault: ');
 
@@ -364,7 +479,7 @@ function renderStatus(e) {
   else if (e.canStart) note = 'You can start a session.';
   $('envNote').textContent = note;
   const parts = [`Profile: ${e.profile === 'testing' ? 'testing (no daily limit)' : 'final limits'}`, `Session length: ${config.sessionMinutes} minutes`];
-  parts.push(e.setsLocked ? `Bilateral sets: locked (${e.lockReason})` : 'Bilateral sets: not in this build');
+  parts.push(e.setsLocked ? `Bilateral sets: locked (${e.lockReason})` : (config.sets.enabled ? 'Bilateral sets: on in calm place' : 'Bilateral sets: locked in calm place until the therapist walkthrough'));
   parts.push(store && store.persistent ? 'Log: saved on this device' : 'Log: not saved (this browser refused storage)');
   $('statusLine').textContent = parts.join(' · ');
 }
@@ -380,7 +495,7 @@ function renderLog() {
     tr.appendChild(el('td', fmtTime(r.startedAt)));
     const mins = r.endedAt ? Math.max(0, (r.endedAt - r.startedAt) / 60000) : 0;
     tr.appendChild(el('td', mins >= 1 ? mins.toFixed(1) + ' min' : Math.round(mins * 60) + ' s'));
-    tr.appendChild(el('td', ROUTES[r.route] || r.route || ''));
+    tr.appendChild(el('td', routeText(r)));
     const d0 = r.baseline && r.baseline.distress;
     const d1 = r.closing && r.closing.distress;
     tr.appendChild(el('td', (d0 === undefined ? '–' : d0) + ' → ' + (d1 === undefined ? '–' : d1)));
@@ -391,6 +506,7 @@ function renderLog() {
     const notes = [];
     if (flags) notes.push('Flagged: ' + flags + (r.real === false ? ' (test)' : r.real === true ? ' (real)' : ' (unanswered)'));
     if (r.stop && !flags) notes.push('Stopped: ' + trig(r.stop.trigger));
+    if (r.setsRun) notes.push(r.setsRun + (r.setsRun === 1 ? ' set' : ' sets'));
     if (r.faults && r.faults.length) notes.push('Faults: ' + r.faults.map((f) => f.kind).join(', '));
     if (!r.completed) notes.push('Ended early' + (r.endedEarly ? ': ' + r.endedEarly : ''));
     tr.appendChild(el('td', notes.join('. ') || 'Nothing flagged'));
@@ -400,7 +516,7 @@ function renderLog() {
   if (lastPreview) {
     prev.hidden = false;
     const flags = describeFlags(lastPreview);
-    prev.textContent = `Last preview (not saved to the log): ${ROUTES[lastPreview.route] || lastPreview.route || 'no route'}; ${flags ? 'flagged: ' + flags : 'nothing flagged'}; ${lastPreview.completed ? 'completed' : 'stopped early'}.`;
+    prev.textContent = `Last preview (not saved to the log): ${routeText(lastPreview)}; ${flags ? 'flagged: ' + flags : 'nothing flagged'}; ${lastPreview.completed ? 'completed' : 'stopped early'}.`;
   } else {
     prev.hidden = true;
   }
@@ -410,10 +526,33 @@ function renderOnboarding() {
   $('onboarding').hidden = onboarded;
 }
 
+function renderSettings(e) {
+  const busy = !!run;
+  for (const id of ['setScene', 'setCue', 'setScale', 'setSound']) $(id).disabled = busy;
+  if (document.activeElement !== $('setCue')) $('setCue').value = config.cueWord;
+  $('setScene').value = config.scene;
+  $('setScale').value = String(config.renderScale);
+  $('setSound').checked = config.sceneSound;
+  $('lakeNote').textContent = config.scene === 'lake' ? (pageEnv.lakePhoto ? 'Lakeshore: using the 360° photo in assets/lakeshore.jpg.' : 'Lakeshore: painted stand-in. Add a licensed 360° photo as assets/lakeshore.jpg to replace it.') : '';
+  $('setsNote').textContent = e.setsLocked
+    ? `Bilateral sets and the engine test are locked: ${e.lockReason}.`
+    : `Bilateral sets: ${config.sets.speed} passes a second, ${config.sets.passes} passes, up to ${config.sets.perSession} sets, light and tone. ${config.sets.enabled ? 'On in calm place.' : 'Locked in calm place; the engine test is available while testing.'}`;
+}
+
+async function saveSettings() {
+  if (run) return;
+  settings = { scene: $('setScene').value, cueWord: $('setCue').value, renderScale: Number($('setScale').value), sceneSound: $('setSound').checked };
+  config = normalizeConfig(settings);
+  settings = { scene: config.scene, cueWord: config.cueWord, renderScale: config.renderScale, sceneSound: config.sceneSound };
+  try { await store.set('settings', settings); $('setNote').textContent = 'Saved.'; } catch (e) { problem('save failed: ' + errText(e)); }
+  renderAll();
+}
+
 function renderAll() {
   const e = eligibility({ config, history, now: Date.now() });
   renderBanner(e);
   renderStatus(e);
+  renderSettings(e);
   renderLog();
   renderOnboarding();
 }
@@ -437,7 +576,7 @@ function download(name, text, type) {
 }
 
 function csv() {
-  const cols = ['id', 'started', 'minutes', 'profile', 'route', 'checkin_distress', 'checkin_unreal', 'baseline_calm', 'closing_distress', 'closing_calm', 'rounds', 'round_answers', 'sets_ended', 'stop', 'flags', 'real_or_test', 'body_check_positive', 'faults', 'completed', 'ended_early', 'fps_average', 'fps_lowest'];
+  const cols = ['id', 'started', 'minutes', 'profile', 'route', 'checkin_distress', 'checkin_unreal', 'baseline_calm', 'closing_distress', 'closing_calm', 'rounds', 'round_answers', 'sets_ended', 'stop', 'flags', 'real_or_test', 'body_check_positive', 'faults', 'completed', 'ended_early', 'fps_average', 'fps_lowest', 'exercise', 'scene', 'sets_run', 'set_seconds', 'tone_late_max_ms', 'frame_gap_max_ms', 'render_scale'];
   const q = (v) => { const s = v === undefined || v === null ? '' : String(v); return /[",\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
   const lines = [cols.join(',')];
   for (const r of history) {
@@ -448,6 +587,11 @@ function csv() {
       (r.flags || []).map((f) => f.trigger).join(' '), r.real === true ? 'real' : r.real === false ? 'test' : '', r.body && r.body.positive,
       (r.faults || []).map((f) => f.kind).join(' '), r.completed, r.endedEarly,
       r.frameRate && r.frameRate.average, r.frameRate && r.frameRate.lowest,
+      r.exercise, r.scene, r.setsRun,
+      (r.rounds || []).filter((x) => x.set).map((x) => (x.set.ranMs / 1000).toFixed(1)).join(' '),
+      (r.rounds || []).filter((x) => x.set && x.set.sync).reduce((a, x) => Math.max(a, x.set.sync.toneLateMaxMs), 0) || '',
+      (r.rounds || []).filter((x) => x.set && x.set.sync).reduce((a, x) => Math.max(a, x.set.sync.frameGapMaxMs), 0) || '',
+      r.settings && r.settings.renderScale,
     ].map(q).join(','));
   }
   return lines.join('\n');
@@ -455,7 +599,7 @@ function csv() {
 
 /* ------------------------------------------------------------------ boot */
 
-const pageEnv = { checked: false, immersiveAr: false, note: '' };
+const pageEnv = { checked: false, immersiveAr: false, note: '', lakePhoto: false };
 
 async function checkEnv() {
   let framed = false;
@@ -467,6 +611,11 @@ async function checkEnv() {
     if (!pageEnv.immersiveAr) pageEnv.note = framed ? 'This page is inside a frame that blocks VR. Open it at its own address.' : 'This browser does not offer passthrough sessions. Use the preview here.';
   }
   pageEnv.checked = true;
+  // Is there a 360° photo for the lakeshore? Never waited on for more than 3 seconds.
+  try {
+    const res = await Promise.race([fetch(LAKE_PHOTO, { method: 'HEAD' }), new Promise((r) => setTimeout(() => r(null), 3000))]);
+    pageEnv.lakePhoto = !!(res && res.ok && /image/.test(res.headers.get('content-type') || ''));
+  } catch (e) { pageEnv.lakePhoto = false; }
 }
 
 function wire() {
@@ -525,7 +674,10 @@ function wire() {
   });
 
   $('versionText').textContent = VERSION;
-  $('btnJson').addEventListener('click', () => download('session-log.json', JSON.stringify({ app: VERSION, exportedAt: new Date().toISOString(), config: { profile: config.profile, sessionMinutes: config.sessionMinutes, distressBlock: config.distressBlock, flagRise: config.flagRise }, sessions: history }, null, 1), 'application/json'));
+  for (const id of ['setScene', 'setScale', 'setSound']) $(id).addEventListener('change', saveSettings);
+  $('setCue').addEventListener('change', saveSettings);
+  $('setCue').addEventListener('input', () => { $('setNote').textContent = ''; });
+  $('btnJson').addEventListener('click', () => download('session-log.json', JSON.stringify({ app: VERSION, exportedAt: new Date().toISOString(), config: { profile: config.profile, sessionMinutes: config.sessionMinutes, distressBlock: config.distressBlock, flagRise: config.flagRise, scene: config.scene, renderScale: config.renderScale, sets: config.sets, breathing: config.breathing, rounds: config.rounds, roundSeconds: config.roundSeconds }, sessions: history }, null, 1), 'application/json'));
   $('btnCsv').addEventListener('click', () => download('session-log.csv', csv(), 'text/csv'));
   $('btnClear').addEventListener('click', () => { $('clearConfirm').hidden = false; });
   $('btnClearNo').addEventListener('click', () => { $('clearConfirm').hidden = true; });
@@ -558,6 +710,12 @@ async function boot() {
     }
     history = await store.sessions();
     onboarded = !!(await store.get('onboarded'));
+    const saved = await store.get('settings');
+    if (saved && typeof saved === 'object') {
+      // Only these four are read back. Limits and the lock on sets are not stored here.
+      settings = { scene: saved.scene, cueWord: saved.cueWord, renderScale: saved.renderScale, sceneSound: saved.sceneSound };
+      config = normalizeConfig(settings);
+    }
   } catch (e) {
     problem('could not read saved data: ' + errText(e));
   }
@@ -574,7 +732,17 @@ async function boot() {
     running: () => !!run,
     problems: () => problems.slice(),
     eligibility: () => eligibility({ config, history, now: Date.now() }),
+    visual: () => (run ? run.machine.visual(clockNow()) : null),
+    stimulus: () => (run ? run.machine.stimulus() : null),
+    stim: () => (run ? { ...run.stim } : null),
+    config: () => config,
+    audio: () => ({ running: audio.running, ambient: audio.ambient, latencyMs: audio.latencyMs() }),
   };
+  // Emulator tests may switch sets on inside calm place for one page load. Nothing is stored,
+  // and the page says so for as long as it is in force.
+  if (window.__SHELL_TEST_SETS_ON) {
+    window.__shell.setsOn = () => { config = normalizeConfig({ ...settings, sets: { enabled: true } }); problem('bilateral sets switched on in calm place by a test hook'); renderAll(); };
+  }
 }
 
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', boot);

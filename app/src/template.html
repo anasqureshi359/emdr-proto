@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Safety shell</title>
+<title>Stabilization practice</title>
 <style>
   :root {
     --bg: #f6f5f1; --card: #ffffff; --ink: #1c1e21; --muted: #5d6470; --line: #d9d6cd;
@@ -45,7 +45,15 @@
     background-size: 48px 48px; background-position: 0 0, 24px 24px; }
   #previewScene { position: absolute; inset: 0; opacity: 0; transition: opacity 1s linear;
     background: linear-gradient(#16203a 0%, #4a5078 38%, #d49a76 49%, #5a5560 51%, #23262e 58%, #101216 100%); }
+  #previewScene.lake { background: linear-gradient(#0e1730 0%, #27365f 22%, #5c5482 36%, #b5806f 45%, #f0bd8c 50%, #3a3a52 51%, #1a2238 62%, #0a0f1c 100%); }
+  #previewScene.room { background: linear-gradient(#cbbfae 0%, #d8ccbb 12%, #d8ccbb 62%, #a47a54 63%, #7a5a3e 100%); }
+  #previewLightRow { position: relative; height: 84px; margin-bottom: 8px; }
+  #previewLight { position: absolute; left: 50%; top: 50%; width: 56px; height: 56px; margin: -28px 0 0 -28px; border-radius: 50%; opacity: 0;
+    background: radial-gradient(circle, rgba(255,236,196,1) 0%, rgba(255,214,150,0.95) 22%, rgba(255,186,110,0.38) 50%, rgba(255,170,90,0) 100%); }
   #previewPanel { position: relative; display: block; width: 100%; height: auto; border-radius: 6px; }
+  .field { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin: 12px 0; }
+  .field > span { min-width: 9.5em; font-weight: 600; }
+  select, input[type="text"] { font: inherit; min-height: 52px; padding: 0 14px; border-radius: 10px; border: 2px solid var(--line); background: var(--card); color: var(--ink); max-width: 100%; }
   #previewText { margin: 12px 0 0; padding: 12px 14px; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; font: inherit; font-size: 16px; white-space: pre-wrap; min-height: 6em; }
   .pad button { min-height: 48px; padding: 0 16px; }
   ul { margin: 0 0 12px; padding-left: 22px; }
@@ -54,8 +62,8 @@
 </head>
 <body>
 <main>
-  <h1>Safety shell</h1>
-  <p class="sub">Build step 3: check-in, stop rules, grounding exit, closure and the session log. There are no exercises and no stimulation in this build.</p>
+  <h1>Stabilization practice</h1>
+  <p class="sub">Build steps 4 and 5: two scenes, paced breathing, grounding, calm place, and the bilateral engine with its lock on. A prototype for testing, not a treatment.</p>
 
   <div id="problems" hidden></div>
   <div id="banner" hidden></div>
@@ -91,10 +99,24 @@
     <p id="statusLine" class="note"></p>
   </section>
 
+  <section id="settingsSection">
+    <h2>Settings</h2>
+    <label class="field"><span>Scene</span>
+      <select id="setScene"><option value="room">Quiet room (stylized)</option><option value="lake">Lakeshore at dusk</option></select></label>
+    <label class="field"><span>Cue word</span>
+      <input type="text" id="setCue" maxlength="24" autocomplete="off" autocapitalize="off" spellcheck="false"></label>
+    <label class="field"><span>Render scale</span>
+      <select id="setScale"><option value="1">1.0 (default)</option><option value="1.2">1.2 (sharper)</option><option value="1.4">1.4 (sharpest)</option></select></label>
+    <label class="ack"><input type="checkbox" id="setSound"><span>Scene sound (water and wind, or a soft room tone)</span></label>
+    <p id="setNote" class="note"></p>
+    <p id="lakeNote" class="note"></p>
+    <p id="setsNote" class="note"></p>
+  </section>
+
   <section id="previewWrap" hidden>
     <h2>On-screen preview</h2>
     <p class="note">The same session logic, drawn on this screen. The checkerboard stands for your real room. Preview sessions are not saved to the log.</p>
-    <div id="previewStage"><div id="previewScene"></div><canvas id="previewPanel"></canvas></div>
+    <div id="previewStage"><div id="previewScene"></div><div id="previewLightRow"><div id="previewLight"></div></div><canvas id="previewPanel"></canvas></div>
     <pre id="previewText" aria-live="polite"></pre>
     <div class="row pad">
       <button data-in="primary" class="primary">Trigger</button>
@@ -137,11 +159,13 @@
   <section>
     <h2>In this build</h2>
     <ul>
-      <li>Check-in routes: crisis card, grounding only, no session today, or the full session.</li>
-      <li>Three empty rounds stand in for the exercises, each followed by the check question.</li>
-      <li>B or Y at any time: the scene fades to your real room and the grounding steps start.</li>
+      <li>After check-in you choose one exercise: paced breathing, calm place, or grounding in your real room.</li>
+      <li>Calm place uses your cue word only. Bilateral sets inside it stay locked until the therapist's walkthrough.</li>
+      <li>Engine test: up to three slow sets of light and tone on their own, to check timing and comfort. Testing profile only.</li>
+      <li>B or Y at any time: light and sound stop, the scene fades to your real room, and the grounding steps start.</li>
       <li>Flagged sessions ask whether the stop was real or a test. A real one pauses the app for 4 hours.</li>
       <li>The crisis card shows sample therapist details. The 988 and 911 lines are real.</li>
+      <li>The lakeshore surroundings are painted as a stand-in until a licensed 360° photo is added.</li>
     </ul>
     <p class="note">Wording on every screen is a draft until the therapist approves the scripts.</p>
   </section>
